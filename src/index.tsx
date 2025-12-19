@@ -1,12 +1,103 @@
 import { Hono } from 'hono'
 import { serveStatic } from 'hono/cloudflare-pages'
 
-const app = new Hono()
+// 環境変数の型定義
+type Bindings = {
+  OPENAI_API_KEY: string
+}
+
+const app = new Hono<{ Bindings: Bindings }>()
 
 // 静的ファイル配信
 app.use('/static/*', serveStatic())
 
-// LP画面（入口）
+// ========== プロンプト生成ロジック ==========
+function generatePrompt(input: {
+  mode: string
+  placeText: string
+  userText: string
+  options: {
+    users: string[]
+    atmosphere: string[]
+    viewpoint: string
+    style: string
+  }
+}): string {
+  const { mode, placeText, userText, options } = input
+
+  // 基本プロンプト
+  let prompt = `A beautiful illustration of a dream town/city scene. `
+
+  // ユーザーのアイデアを追加
+  prompt += `The scene depicts: ${userText}. `
+
+  // 場所が指定されている場合
+  if (placeText) {
+    prompt += `Location inspiration: ${placeText} area in Japan. `
+  }
+
+  // モード②の追加オプション
+  if (mode === 'arranger' && options) {
+    // 利用者
+    if (options.users && options.users.length > 0) {
+      const userMap: Record<string, string> = {
+        'こども': 'children playing',
+        'ティーン': 'teenagers hanging out',
+        '大人': 'adults relaxing',
+        '高齢者': 'elderly people enjoying',
+        '家族': 'families with children',
+        '全世代': 'people of all ages'
+      }
+      const userDesc = options.users.map(u => userMap[u] || u).join(', ')
+      prompt += `The scene includes ${userDesc}. `
+    }
+
+    // 雰囲気
+    if (options.atmosphere && options.atmosphere.length > 0) {
+      const atmosphereMap: Record<string, string> = {
+        'ナチュラル': 'natural and organic atmosphere with greenery',
+        'カラフル': 'colorful and vibrant atmosphere',
+        '落ち着いた': 'calm and peaceful atmosphere',
+        'にぎやか': 'lively and bustling atmosphere',
+        'レトロ': 'retro and nostalgic atmosphere',
+        '先進的': 'futuristic and modern atmosphere'
+      }
+      const atmDesc = options.atmosphere.map(a => atmosphereMap[a] || a).join(', ')
+      prompt += `${atmDesc}. `
+    }
+
+    // 視点
+    if (options.viewpoint) {
+      const viewpointMap: Record<string, string> = {
+        '目の高さ': 'eye-level perspective, street view',
+        '鳥の目': 'bird\'s eye view, aerial perspective',
+        'ななめ上': 'elevated angle, 45-degree perspective from above'
+      }
+      prompt += `${viewpointMap[options.viewpoint] || options.viewpoint}. `
+    }
+
+    // 作風
+    if (options.style) {
+      const styleMap: Record<string, string> = {
+        'リアル写真風': 'photorealistic, high detail photograph style',
+        'イラスト風': 'digital illustration style, clean lines',
+        '水彩画風': 'watercolor painting style, soft edges',
+        'アニメ風': 'anime style, Japanese animation aesthetic'
+      }
+      prompt += `Art style: ${styleMap[options.style] || options.style}. `
+    }
+  } else {
+    // モード①のデフォルトスタイル
+    prompt += `Art style: warm and inviting digital illustration, soft lighting, cheerful atmosphere. `
+  }
+
+  // 共通の品質指示
+  prompt += `High quality, detailed, beautiful composition, warm colors, inviting atmosphere.`
+
+  return prompt
+}
+
+// ========== LP画面（入口） ==========
 app.get('/', (c) => {
   return c.html(`
 <!DOCTYPE html>
@@ -16,18 +107,8 @@ app.get('/', (c) => {
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>夢のまちを描こう</title>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    html, body {
-      height: 100%;
-      width: 100%;
-      overflow: hidden;
-    }
-
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; width: 100%; overflow: hidden; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', Meiryo, sans-serif;
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -38,7 +119,6 @@ app.get('/', (c) => {
       min-height: 100dvh;
       padding: 20px;
     }
-
     .container {
       display: flex;
       flex-direction: column;
@@ -49,7 +129,6 @@ app.get('/', (c) => {
       gap: 48px;
       transform: translateY(-10%);
     }
-
     .catchcopy {
       color: #ffffff;
       font-size: clamp(1.5rem, 6vw, 2rem);
@@ -59,7 +138,6 @@ app.get('/', (c) => {
       text-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
       letter-spacing: 0.05em;
     }
-
     .start-button {
       width: 85%;
       min-width: 280px;
@@ -76,23 +154,11 @@ app.get('/', (c) => {
       box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
       -webkit-tap-highlight-color: transparent;
       touch-action: manipulation;
-    }
-
-    .start-button:hover {
-      transform: scale(1.03);
-      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
-    }
-
-    .start-button:active {
-      transform: scale(0.97);
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-    }
-
-    .start-button {
       position: relative;
       overflow: hidden;
     }
-
+    .start-button:hover { transform: scale(1.03); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25); }
+    .start-button:active { transform: scale(0.97); box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2); }
     .start-button::after {
       content: '';
       position: absolute;
@@ -105,25 +171,8 @@ app.get('/', (c) => {
       transform: translate(-50%, -50%);
       transition: width 0.4s ease, height 0.4s ease;
     }
-
-    .start-button:active::after {
-      width: 300px;
-      height: 300px;
-    }
-
-    .start-button:focus {
-      outline: 3px solid rgba(255, 255, 255, 0.5);
-      outline-offset: 4px;
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .start-button {
-        transition: none;
-      }
-      .start-button::after {
-        display: none;
-      }
-    }
+    .start-button:active::after { width: 300px; height: 300px; }
+    .start-button:focus { outline: 3px solid rgba(255, 255, 255, 0.5); outline-offset: 4px; }
   </style>
 </head>
 <body>
@@ -131,7 +180,6 @@ app.get('/', (c) => {
     <h1 class="catchcopy">AIと一緒に、<br>夢のまちをえがこう。</h1>
     <button class="start-button" onclick="handleStart()">はじめる</button>
   </main>
-
   <script>
     function handleStart() {
       localStorage.setItem('lpSeen', 'true');
@@ -143,7 +191,7 @@ app.get('/', (c) => {
   `)
 })
 
-// チャット画面（LINE風）
+// ========== チャット画面（LINE風） ==========
 app.get('/chat', (c) => {
   return c.html(`
 <!DOCTYPE html>
@@ -153,18 +201,8 @@ app.get('/chat', (c) => {
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>ゆめまち - チャット</title>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    html, body {
-      height: 100%;
-      width: 100%;
-      overflow: hidden;
-    }
-
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; width: 100%; overflow: hidden; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', Meiryo, sans-serif;
       background: #e8e8ed;
@@ -172,7 +210,6 @@ app.get('/chat', (c) => {
       flex-direction: column;
       height: 100dvh;
     }
-
     .chat-container {
       flex: 1;
       display: flex;
@@ -184,8 +221,6 @@ app.get('/chat', (c) => {
       height: 100%;
       overflow: hidden;
     }
-
-    /* ヘッダー */
     .chat-header {
       display: flex;
       align-items: center;
@@ -195,7 +230,6 @@ app.get('/chat', (c) => {
       border-bottom: 1px solid #d1d1d6;
       flex-shrink: 0;
     }
-
     .header-left {
       display: flex;
       align-items: center;
@@ -208,21 +242,9 @@ app.get('/chat', (c) => {
       border-radius: 8px;
       transition: background 0.2s;
     }
-
-    .header-left:hover {
-      background: rgba(0, 122, 255, 0.1);
-    }
-
-    .header-left:active {
-      background: rgba(0, 122, 255, 0.2);
-    }
-
-    .header-title {
-      font-size: 1.1rem;
-      font-weight: 600;
-      color: #1c1c1e;
-    }
-
+    .header-left:hover { background: rgba(0, 122, 255, 0.1); }
+    .header-left:active { background: rgba(0, 122, 255, 0.2); }
+    .header-title { font-size: 1.1rem; font-weight: 600; color: #1c1c1e; }
     .header-right {
       font-size: 0.85rem;
       color: #8e8e93;
@@ -232,16 +254,8 @@ app.get('/chat', (c) => {
       border-radius: 8px;
       transition: background 0.2s;
     }
-
-    .header-right:hover {
-      background: rgba(0, 0, 0, 0.05);
-    }
-
-    .header-right:active {
-      background: rgba(0, 0, 0, 0.1);
-    }
-
-    /* チャットログエリア */
+    .header-right:hover { background: rgba(0, 0, 0, 0.05); }
+    .header-right:active { background: rgba(0, 0, 0, 0.1); }
     .chat-messages {
       flex: 1;
       padding: 16px;
@@ -251,7 +265,6 @@ app.get('/chat', (c) => {
       gap: 12px;
       -webkit-overflow-scrolling: touch;
     }
-
     .message {
       max-width: 80%;
       padding: 10px 14px;
@@ -261,18 +274,10 @@ app.get('/chat', (c) => {
       word-break: break-word;
       animation: fadeIn 0.3s ease;
     }
-
     @keyframes fadeIn {
-      from {
-        opacity: 0;
-        transform: translateY(8px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
     }
-
     .message.bot {
       align-self: flex-start;
       background: #ffffff;
@@ -280,15 +285,12 @@ app.get('/chat', (c) => {
       border-bottom-left-radius: 4px;
       box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
     }
-
     .message.user {
       align-self: flex-end;
       background: #34c759;
       color: #ffffff;
       border-bottom-right-radius: 4px;
     }
-
-    /* 入力エリア（下部固定） */
     .input-area {
       padding: 12px 16px;
       padding-bottom: max(12px, env(safe-area-inset-bottom));
@@ -296,14 +298,7 @@ app.get('/chat', (c) => {
       border-top: 1px solid #d1d1d6;
       flex-shrink: 0;
     }
-
-    /* テキスト入力 */
-    .text-input-wrapper {
-      display: flex;
-      gap: 10px;
-      align-items: flex-end;
-    }
-
+    .text-input-wrapper { display: flex; gap: 10px; align-items: flex-end; }
     .text-input {
       flex: 1;
       padding: 10px 16px;
@@ -318,15 +313,8 @@ app.get('/chat', (c) => {
       line-height: 1.4;
       transition: border-color 0.2s;
     }
-
-    .text-input:focus {
-      border-color: #007aff;
-    }
-
-    .text-input::placeholder {
-      color: #8e8e93;
-    }
-
+    .text-input:focus { border-color: #007aff; }
+    .text-input::placeholder { color: #8e8e93; }
     .send-btn {
       width: 40px;
       height: 40px;
@@ -342,27 +330,10 @@ app.get('/chat', (c) => {
       flex-shrink: 0;
       transition: transform 0.15s, opacity 0.15s, background 0.15s;
     }
-
-    .send-btn:hover {
-      background: #0056b3;
-    }
-
-    .send-btn:active {
-      transform: scale(0.92);
-    }
-
-    .send-btn:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
-    }
-
-    /* ボタン選択 */
-    .button-options {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-
+    .send-btn:hover { background: #0056b3; }
+    .send-btn:active { transform: scale(0.92); }
+    .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .button-options { display: flex; flex-direction: column; gap: 10px; }
     .option-btn {
       width: 100%;
       padding: 14px 20px;
@@ -378,27 +349,8 @@ app.get('/chat', (c) => {
       touch-action: manipulation;
       min-height: 50px;
     }
-
-    .option-btn:hover {
-      background: rgba(0, 122, 255, 0.08);
-    }
-
-    .option-btn:active {
-      transform: scale(0.98);
-      background: rgba(0, 122, 255, 0.15);
-    }
-
-    .option-btn.primary {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: #ffffff;
-      border: none;
-      font-weight: 600;
-    }
-
-    .option-btn.primary:hover {
-      opacity: 0.9;
-    }
-
+    .option-btn:hover { background: rgba(0, 122, 255, 0.08); }
+    .option-btn:active { transform: scale(0.98); background: rgba(0, 122, 255, 0.15); }
     .option-btn.skip {
       background: transparent;
       border: 1px solid #8e8e93;
@@ -406,26 +358,14 @@ app.get('/chat', (c) => {
       font-size: 0.9rem;
       min-height: 44px;
     }
-
-    .option-btn.skip:hover {
-      background: rgba(0, 0, 0, 0.03);
-    }
-
-    /* ボタン行（横並び） */
-    .button-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-
+    .option-btn.skip:hover { background: rgba(0, 0, 0, 0.03); }
+    .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
     .button-row .option-btn {
       flex: 1 1 calc(50% - 4px);
       min-width: 120px;
       padding: 12px 16px;
       font-size: 0.9rem;
     }
-
-    /* 生成ボタン */
     .generate-btn {
       width: 100%;
       padding: 16px 24px;
@@ -440,34 +380,15 @@ app.get('/chat', (c) => {
       box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
       min-height: 54px;
     }
-
-    .generate-btn:hover {
-      box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
-    }
-
-    .generate-btn:active {
-      transform: scale(0.98);
-    }
-
-    /* 非表示 */
-    .hidden {
-      display: none !important;
-    }
-
-    /* スクロールバー */
-    .chat-messages::-webkit-scrollbar {
-      width: 4px;
-    }
-
-    .chat-messages::-webkit-scrollbar-thumb {
-      background: rgba(0, 0, 0, 0.2);
-      border-radius: 2px;
-    }
+    .generate-btn:hover { box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5); }
+    .generate-btn:active { transform: scale(0.98); }
+    .generate-btn:disabled { opacity: 0.7; cursor: not-allowed; }
+    .chat-messages::-webkit-scrollbar { width: 4px; }
+    .chat-messages::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.2); border-radius: 2px; }
   </style>
 </head>
 <body>
   <div class="chat-container">
-    <!-- ヘッダー -->
     <header class="chat-header">
       <div class="header-left" onclick="goBack()">
         <span>‹</span>
@@ -476,41 +397,22 @@ app.get('/chat', (c) => {
       <div class="header-title">ゆめまち</div>
       <div class="header-right" onclick="resetChat()">やり直し</div>
     </header>
-
-    <!-- チャットログ -->
     <div class="chat-messages" id="messages"></div>
-
-    <!-- 入力エリア -->
-    <div class="input-area" id="inputArea">
-      <!-- 動的に切り替え -->
-    </div>
+    <div class="input-area" id="inputArea"></div>
   </div>
 
   <script>
-    // ========== 状態管理 ==========
     const draft = {
       mode: '',
       placeText: '',
       userText: '',
-      options: {
-        users: [],
-        atmosphere: [],
-        viewpoint: '',
-        style: ''
-      }
+      options: { users: [], atmosphere: [], viewpoint: '', style: '' }
     };
-
-    let stepIndex = 0;
     let currentMode = '';
-    const messages = [];
-
-    // ========== DOM要素 ==========
     const messagesContainer = document.getElementById('messages');
     const inputArea = document.getElementById('inputArea');
 
-    // ========== 初期化 ==========
     function init() {
-      // Step0: 初回メッセージ
       addBotMessage('こんにちは！"夢のまち"を一緒に描こう。');
       setTimeout(() => {
         addBotMessage('まず作り方を選んでね。');
@@ -518,14 +420,11 @@ app.get('/chat', (c) => {
       }, 600);
     }
 
-    // ========== メッセージ追加 ==========
     function addBotMessage(text) {
-      messages.push({ role: 'bot', text });
       renderMessage('bot', text);
     }
 
     function addUserMessage(text) {
-      messages.push({ role: 'user', text });
       renderMessage('user', text);
     }
 
@@ -534,18 +433,10 @@ app.get('/chat', (c) => {
       div.className = 'message ' + role;
       div.textContent = text;
       messagesContainer.appendChild(div);
-      scrollToBottom();
+      setTimeout(() => { messagesContainer.scrollTop = messagesContainer.scrollHeight; }, 50);
     }
 
-    function scrollToBottom() {
-      setTimeout(() => {
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-      }, 50);
-    }
-
-    // ========== 入力UI ==========
     function showModeSelection() {
-      stepIndex = 1;
       inputArea.innerHTML = \`
         <div class="button-options">
           <button class="option-btn" onclick="selectMode('dreamer')">①お任せ（かんたん）</button>
@@ -555,7 +446,6 @@ app.get('/chat', (c) => {
     }
 
     function showPlaceInput() {
-      stepIndex = 2;
       inputArea.innerHTML = \`
         <div class="text-input-wrapper">
           <input type="text" class="text-input" id="placeInput" placeholder="例：川西能勢口駅前、池田市役所周辺" autocomplete="off">
@@ -567,13 +457,10 @@ app.get('/chat', (c) => {
       \`;
       const input = document.getElementById('placeInput');
       input.focus();
-      input.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') submitPlace();
-      });
+      input.addEventListener('keypress', (e) => { if (e.key === 'Enter') submitPlace(); });
     }
 
     function showIdeaInput() {
-      stepIndex = 3;
       inputArea.innerHTML = \`
         <div class="text-input-wrapper">
           <textarea class="text-input" id="ideaInput" rows="3" placeholder="80〜200文字くらいで教えてね（短くてもOK）"></textarea>
@@ -583,12 +470,8 @@ app.get('/chat', (c) => {
       const textarea = document.getElementById('ideaInput');
       textarea.focus();
       textarea.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          submitIdea();
-        }
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitIdea(); }
       });
-      // 自動リサイズ
       textarea.addEventListener('input', () => {
         textarea.style.height = 'auto';
         textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
@@ -596,7 +479,6 @@ app.get('/chat', (c) => {
     }
 
     function showUsersSelection() {
-      stepIndex = 4;
       const options = ['こども', 'ティーン', '大人', '高齢者', '家族', '全世代'];
       inputArea.innerHTML = \`
         <div class="button-options">
@@ -608,7 +490,6 @@ app.get('/chat', (c) => {
     }
 
     function showAtmosphereSelection() {
-      stepIndex = 5;
       const options = ['ナチュラル', 'カラフル', '落ち着いた', 'にぎやか', 'レトロ', '先進的'];
       inputArea.innerHTML = \`
         <div class="button-options">
@@ -620,7 +501,6 @@ app.get('/chat', (c) => {
     }
 
     function showViewpointSelection() {
-      stepIndex = 6;
       const options = ['目の高さ', '鳥の目', 'ななめ上'];
       inputArea.innerHTML = \`
         <div class="button-options">
@@ -632,7 +512,6 @@ app.get('/chat', (c) => {
     }
 
     function showStyleSelection() {
-      stepIndex = 7;
       const options = ['リアル写真風', 'イラスト風', '水彩画風', 'アニメ風'];
       inputArea.innerHTML = \`
         <div class="button-options">
@@ -644,72 +523,39 @@ app.get('/chat', (c) => {
     }
 
     function showGenerateButton() {
-      stepIndex = 99;
-      inputArea.innerHTML = \`
-        <button class="generate-btn" onclick="generate()">生成する</button>
-      \`;
+      inputArea.innerHTML = \`<button class="generate-btn" onclick="generate()">生成する</button>\`;
     }
 
-    // ========== 選択ハンドラ ==========
     function selectMode(mode) {
       currentMode = mode;
       draft.mode = mode;
-      const label = mode === 'dreamer' ? '①お任せ（かんたん）' : '②ちょい足し（少しこだわる）';
-      addUserMessage(label);
-
-      setTimeout(() => {
-        addBotMessage('場所はどこにする？（未入力でもOK）');
-        showPlaceInput();
-      }, 400);
+      addUserMessage(mode === 'dreamer' ? '①お任せ（かんたん）' : '②ちょい足し（少しこだわる）');
+      setTimeout(() => { addBotMessage('場所はどこにする？（未入力でもOK）'); showPlaceInput(); }, 400);
     }
 
     function submitPlace() {
-      const input = document.getElementById('placeInput');
-      const value = input.value.trim();
+      const value = document.getElementById('placeInput').value.trim();
       draft.placeText = value;
-      
-      if (value) {
-        addUserMessage(value);
-      } else {
-        addUserMessage('（未入力）');
-      }
-
-      setTimeout(() => {
-        addBotMessage('どんな"夢のまち"にしたい？自由に教えてね');
-        showIdeaInput();
-      }, 400);
+      addUserMessage(value || '（未入力）');
+      setTimeout(() => { addBotMessage('どんな"夢のまち"にしたい？自由に教えてね'); showIdeaInput(); }, 400);
     }
 
     function skipPlace() {
       draft.placeText = '';
       addUserMessage('スキップ');
-
-      setTimeout(() => {
-        addBotMessage('どんな"夢のまち"にしたい？自由に教えてね');
-        showIdeaInput();
-      }, 400);
+      setTimeout(() => { addBotMessage('どんな"夢のまち"にしたい？自由に教えてね'); showIdeaInput(); }, 400);
     }
 
     function submitIdea() {
-      const textarea = document.getElementById('ideaInput');
-      const value = textarea.value.trim();
-
-      if (!value) {
-        alert('1行でもいいので入力してね');
-        textarea.focus();
-        return;
-      }
-
+      const value = document.getElementById('ideaInput').value.trim();
+      if (!value) { alert('1行でもいいので入力してね'); return; }
       draft.userText = value;
       addUserMessage(value);
-
       setTimeout(() => {
         if (currentMode === 'arranger') {
-          // モード②: 追加オプション
           addBotMessage('だれ向けのまち？');
           showUsersSelection();
         } else {
-          // モード①: 生成へ
           addBotMessage('いいね！画像をつくるよ。');
           showGenerateButton();
         }
@@ -719,48 +565,31 @@ app.get('/chat', (c) => {
     function selectUsers(value) {
       draft.options.users = [value];
       addUserMessage(value);
-
-      setTimeout(() => {
-        addBotMessage('どんな雰囲気？');
-        showAtmosphereSelection();
-      }, 400);
+      setTimeout(() => { addBotMessage('どんな雰囲気？'); showAtmosphereSelection(); }, 400);
     }
 
     function selectAtmosphere(value) {
       draft.options.atmosphere = [value];
       addUserMessage(value);
-
-      setTimeout(() => {
-        addBotMessage('どこから見たい？');
-        showViewpointSelection();
-      }, 400);
+      setTimeout(() => { addBotMessage('どこから見たい？'); showViewpointSelection(); }, 400);
     }
 
     function selectViewpoint(value) {
       draft.options.viewpoint = value;
       addUserMessage(value);
-
-      setTimeout(() => {
-        addBotMessage('どんな絵のテイスト？');
-        showStyleSelection();
-      }, 400);
+      setTimeout(() => { addBotMessage('どんな絵のテイスト？'); showStyleSelection(); }, 400);
     }
 
     function selectStyle(value) {
       draft.options.style = value;
       addUserMessage(value);
-
-      setTimeout(() => {
-        addBotMessage('いいね！画像をつくるよ。');
-        showGenerateButton();
-      }, 400);
+      setTimeout(() => { addBotMessage('いいね！画像をつくるよ。'); showGenerateButton(); }, 400);
     }
 
-    // ========== 生成 ==========
     async function generate() {
       const btn = document.querySelector('.generate-btn');
       btn.disabled = true;
-      btn.textContent = '送信中...';
+      btn.textContent = '生成中...';
 
       const payload = {
         mode: draft.mode,
@@ -769,51 +598,25 @@ app.get('/chat', (c) => {
         options: draft.options
       };
 
-      try {
-        const res = await fetch('/api/generate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-
-        if (!res.ok) throw new Error('API Error');
-
-        const data = await res.json();
-        
-        // 結果を保存して遷移
-        sessionStorage.setItem('generateRequest', JSON.stringify(payload));
-        sessionStorage.setItem('generateResult', JSON.stringify(data));
-        window.location.href = '/loading';
-
-      } catch (err) {
-        console.error(err);
-        btn.disabled = false;
-        btn.textContent = '生成する';
-        addBotMessage('ごめんね、エラーが起きたみたい。もう一度試してね。');
-      }
+      // リクエストを保存してローディング画面へ遷移
+      sessionStorage.setItem('generateRequest', JSON.stringify(payload));
+      window.location.href = '/loading';
     }
 
-    // ========== ナビゲーション ==========
-    function goBack() {
-      window.location.href = '/';
-    }
+    function goBack() { window.location.href = '/'; }
 
     function resetChat() {
       if (confirm('最初からやり直しますか？')) {
-        // リセット
         draft.mode = '';
         draft.placeText = '';
         draft.userText = '';
         draft.options = { users: [], atmosphere: [], viewpoint: '', style: '' };
-        stepIndex = 0;
         currentMode = '';
-        messages.length = 0;
         messagesContainer.innerHTML = '';
         init();
       }
     }
 
-    // ========== 開始 ==========
     init();
   </script>
 </body>
@@ -821,7 +624,7 @@ app.get('/chat', (c) => {
   `)
 })
 
-// ローディング画面（画像生成中）
+// ========== ローディング画面（画像生成実行） ==========
 app.get('/loading', (c) => {
   return c.html(`
 <!DOCTYPE html>
@@ -831,18 +634,8 @@ app.get('/loading', (c) => {
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>生成中... - ゆめまち</title>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    html, body {
-      height: 100%;
-      width: 100%;
-      overflow: hidden;
-    }
-
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; width: 100%; overflow: hidden; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', Meiryo, sans-serif;
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -853,7 +646,6 @@ app.get('/loading', (c) => {
       min-height: 100dvh;
       padding: 20px;
     }
-
     .loading-container {
       display: flex;
       flex-direction: column;
@@ -861,7 +653,6 @@ app.get('/loading', (c) => {
       gap: 32px;
       text-align: center;
     }
-
     .spinner {
       width: 60px;
       height: 60px;
@@ -870,32 +661,19 @@ app.get('/loading', (c) => {
       border-radius: 50%;
       animation: spin 1s linear infinite;
     }
-
-    @keyframes spin {
-      to {
-        transform: rotate(360deg);
-      }
-    }
-
+    @keyframes spin { to { transform: rotate(360deg); } }
     .loading-text {
       color: #ffffff;
       font-size: 1.25rem;
       font-weight: 500;
       line-height: 1.6;
     }
-
     .loading-sub {
       color: rgba(255, 255, 255, 0.8);
       font-size: 0.9rem;
       margin-top: 8px;
     }
-
-    .progress-dots {
-      display: flex;
-      gap: 8px;
-      margin-top: 16px;
-    }
-
+    .progress-dots { display: flex; gap: 8px; margin-top: 16px; }
     .progress-dot {
       width: 10px;
       height: 10px;
@@ -903,33 +681,42 @@ app.get('/loading', (c) => {
       border-radius: 50%;
       animation: pulse 1.5s ease-in-out infinite;
     }
-
-    .progress-dot:nth-child(2) {
-      animation-delay: 0.2s;
-    }
-
-    .progress-dot:nth-child(3) {
-      animation-delay: 0.4s;
-    }
-
+    .progress-dot:nth-child(2) { animation-delay: 0.2s; }
+    .progress-dot:nth-child(3) { animation-delay: 0.4s; }
     @keyframes pulse {
-      0%, 100% {
-        opacity: 0.4;
-        transform: scale(1);
-      }
-      50% {
-        opacity: 1;
-        transform: scale(1.2);
-      }
+      0%, 100% { opacity: 0.4; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.2); }
     }
+    .error-container {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      text-align: center;
+    }
+    .error-icon { font-size: 48px; }
+    .error-text { color: #ffffff; font-size: 1.1rem; line-height: 1.6; }
+    .retry-btn {
+      padding: 14px 32px;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #667eea;
+      background: #ffffff;
+      border: none;
+      border-radius: 25px;
+      cursor: pointer;
+      transition: transform 0.15s;
+    }
+    .retry-btn:hover { transform: scale(1.05); }
+    .retry-btn:active { transform: scale(0.98); }
   </style>
 </head>
 <body>
-  <div class="loading-container">
+  <div class="loading-container" id="loadingContainer">
     <div class="spinner"></div>
     <div>
-      <div class="loading-text">夢のまちを描いています...</div>
-      <div class="loading-sub">少々お待ちください</div>
+      <div class="loading-text" id="loadingText">夢のまちを描いています...</div>
+      <div class="loading-sub" id="loadingSub">AIが画像を生成中です（20〜30秒ほどかかります）</div>
     </div>
     <div class="progress-dots">
       <div class="progress-dot"></div>
@@ -938,62 +725,353 @@ app.get('/loading', (c) => {
     </div>
   </div>
 
-  <script>
-    // 生成リクエストの確認
-    const request = sessionStorage.getItem('generateRequest');
-    const result = sessionStorage.getItem('generateResult');
+  <div class="error-container" id="errorContainer">
+    <div class="error-icon">😢</div>
+    <div class="error-text" id="errorText">画像の生成に失敗しました</div>
+    <button class="retry-btn" onclick="retry()">もう一度試す</button>
+    <button class="retry-btn" onclick="goBack()" style="background: transparent; color: white; border: 2px solid white;">戻る</button>
+  </div>
 
+  <script>
+    const request = sessionStorage.getItem('generateRequest');
+    
     if (!request) {
-      // リクエストがない場合はチャットに戻す
       window.location.href = '/chat';
-    } else if (result) {
-      // 結果がある場合は結果画面へ（今後実装）
-      // window.location.href = '/result';
-      console.log('Result:', JSON.parse(result));
+    } else {
+      generateImage(JSON.parse(request));
     }
 
-    // デモ用: 3秒後にアラート
-    setTimeout(() => {
-      const data = JSON.parse(result || '{}');
-      alert('生成完了！\\n\\n' + JSON.stringify(data, null, 2));
-    }, 2000);
+    async function generateImage(payload) {
+      try {
+        const res = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || '画像生成に失敗しました');
+        }
+
+        // 成功：結果を保存して結果画面へ
+        sessionStorage.setItem('generateResult', JSON.stringify(data));
+        window.location.href = '/result';
+
+      } catch (err) {
+        console.error('Generation error:', err);
+        showError(err.message);
+      }
+    }
+
+    function showError(message) {
+      document.getElementById('loadingContainer').style.display = 'none';
+      document.getElementById('errorContainer').style.display = 'flex';
+      document.getElementById('errorText').textContent = message || '画像の生成に失敗しました';
+    }
+
+    function retry() {
+      document.getElementById('errorContainer').style.display = 'none';
+      document.getElementById('loadingContainer').style.display = 'flex';
+      const request = sessionStorage.getItem('generateRequest');
+      if (request) {
+        generateImage(JSON.parse(request));
+      }
+    }
+
+    function goBack() {
+      window.location.href = '/chat';
+    }
   </script>
 </body>
 </html>
   `)
 })
 
-// 生成API
+// ========== 結果表示画面 ==========
+app.get('/result', (c) => {
+  return c.html(`
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>完成！ - ゆめまち</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; width: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', Meiryo, sans-serif;
+      background: #f5f5f7;
+      min-height: 100dvh;
+    }
+    .result-container {
+      max-width: 480px;
+      width: 100%;
+      margin: 0 auto;
+      background: #ffffff;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+    .result-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #ffffff;
+    }
+    .header-back {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      color: #ffffff;
+      font-size: 1rem;
+      cursor: pointer;
+      padding: 8px;
+      margin: -8px;
+      border-radius: 8px;
+      transition: background 0.2s;
+    }
+    .header-back:hover { background: rgba(255, 255, 255, 0.2); }
+    .header-title { font-size: 1.1rem; font-weight: 600; }
+    .header-spacer { width: 60px; }
+    .result-content {
+      flex: 1;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .result-image-container {
+      width: 100%;
+      aspect-ratio: 1;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+      background: #e8e8ed;
+    }
+    .result-image {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .result-title {
+      font-size: 1.3rem;
+      font-weight: 600;
+      color: #1c1c1e;
+      text-align: center;
+    }
+    .result-description {
+      font-size: 0.95rem;
+      color: #666;
+      line-height: 1.6;
+      text-align: center;
+    }
+    .action-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 20px;
+      padding-bottom: max(20px, env(safe-area-inset-bottom));
+      background: #ffffff;
+      border-top: 1px solid #e5e5e5;
+    }
+    .action-btn {
+      width: 100%;
+      padding: 16px 24px;
+      font-size: 1rem;
+      font-weight: 600;
+      border-radius: 14px;
+      cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.15s;
+      border: none;
+    }
+    .action-btn.primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #ffffff;
+      box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+    }
+    .action-btn.primary:hover { box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5); }
+    .action-btn.secondary {
+      background: #ffffff;
+      color: #667eea;
+      border: 2px solid #667eea;
+    }
+    .action-btn.secondary:hover { background: rgba(102, 126, 234, 0.05); }
+    .action-btn:active { transform: scale(0.98); }
+    .prompt-section {
+      background: #f8f8f8;
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .prompt-label {
+      font-size: 0.8rem;
+      color: #8e8e93;
+      margin-bottom: 8px;
+    }
+    .prompt-text {
+      font-size: 0.85rem;
+      color: #666;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+  <div class="result-container">
+    <header class="result-header">
+      <div class="header-back" onclick="goToChat()">
+        <span>‹</span>
+        <span>戻る</span>
+      </div>
+      <div class="header-title">完成！</div>
+      <div class="header-spacer"></div>
+    </header>
+
+    <div class="result-content" id="resultContent">
+      <div class="result-image-container">
+        <img class="result-image" id="resultImage" src="" alt="生成された画像">
+      </div>
+      <h1 class="result-title">あなたの夢のまち</h1>
+      <p class="result-description" id="resultDescription"></p>
+      <div class="prompt-section">
+        <div class="prompt-label">使用したプロンプト</div>
+        <div class="prompt-text" id="promptText"></div>
+      </div>
+    </div>
+
+    <div class="action-buttons">
+      <button class="action-btn primary" onclick="downloadImage()">画像を保存</button>
+      <button class="action-btn secondary" onclick="createNew()">もう一度つくる</button>
+    </div>
+  </div>
+
+  <script>
+    const result = sessionStorage.getItem('generateResult');
+    const request = sessionStorage.getItem('generateRequest');
+
+    if (!result) {
+      window.location.href = '/chat';
+    } else {
+      displayResult(JSON.parse(result), JSON.parse(request || '{}'));
+    }
+
+    function displayResult(data, requestData) {
+      document.getElementById('resultImage').src = data.imageUrl;
+      document.getElementById('resultDescription').textContent = requestData.userText || '';
+      document.getElementById('promptText').textContent = data.prompt || '';
+    }
+
+    function downloadImage() {
+      const result = JSON.parse(sessionStorage.getItem('generateResult') || '{}');
+      if (result.imageUrl) {
+        const link = document.createElement('a');
+        link.href = result.imageUrl;
+        link.download = 'yumemachi-' + Date.now() + '.png';
+        link.target = '_blank';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+    }
+
+    function createNew() {
+      sessionStorage.removeItem('generateRequest');
+      sessionStorage.removeItem('generateResult');
+      window.location.href = '/chat';
+    }
+
+    function goToChat() {
+      window.location.href = '/chat';
+    }
+  </script>
+</body>
+</html>
+  `)
+})
+
+// ========== 画像生成API ==========
 app.post('/api/generate', async (c) => {
   try {
     const body = await c.req.json()
-    
     const { mode, placeText, userText, options } = body
 
     // バリデーション
     if (!mode || !userText) {
-      return c.json({ error: 'mode と userText は必須です' }, 400)
+      return c.json({ error: 'mode と userText は必須です', success: false }, 400)
     }
 
-    // ここで実際の画像生成処理を行う（今後実装）
-    // 現時点ではモックレスポンス
-    const response = {
+    // プロンプト生成
+    const prompt = generatePrompt({ mode, placeText, userText, options })
+
+    // OpenAI API Key
+    const apiKey = c.env.OPENAI_API_KEY
+    if (!apiKey) {
+      return c.json({ error: 'OpenAI API Keyが設定されていません', success: false }, 500)
+    }
+
+    // DALL-E 3 API呼び出し
+    const openaiResponse = await fetch('https://api.openai.com/v1/images/generations', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'dall-e-3',
+        prompt: prompt,
+        n: 1,
+        size: '1024x1024',
+        quality: 'standard',
+        response_format: 'url'
+      })
+    })
+
+    if (!openaiResponse.ok) {
+      const errorData = await openaiResponse.json().catch(() => ({}))
+      console.error('OpenAI API Error:', errorData)
+      
+      // エラーメッセージの整形
+      let errorMessage = '画像生成に失敗しました'
+      if (errorData.error?.message) {
+        if (errorData.error.message.includes('content_policy')) {
+          errorMessage = 'コンテンツポリシーに抵触しました。別の内容で試してください。'
+        } else if (errorData.error.message.includes('rate_limit')) {
+          errorMessage = 'APIの利用制限に達しました。しばらく待ってから再試行してください。'
+        } else if (errorData.error.message.includes('invalid_api_key')) {
+          errorMessage = 'APIキーが無効です。'
+        }
+      }
+      
+      return c.json({ error: errorMessage, success: false }, 500)
+    }
+
+    const openaiData = await openaiResponse.json() as {
+      data: Array<{ url: string; revised_prompt?: string }>
+    }
+
+    // 成功レスポンス
+    const imageUrl = openaiData.data[0]?.url
+    const revisedPrompt = openaiData.data[0]?.revised_prompt
+
+    return c.json({
       success: true,
       requestId: crypto.randomUUID(),
-      input: {
-        mode,
-        placeText,
-        userText,
-        options
-      },
-      message: '画像生成リクエストを受け付けました',
-      // 今後: imageUrl, prompt などを返す
-    }
+      imageUrl: imageUrl,
+      prompt: prompt,
+      revisedPrompt: revisedPrompt,
+      input: { mode, placeText, userText, options }
+    })
 
-    return c.json(response)
   } catch (error) {
     console.error('Generate API Error:', error)
-    return c.json({ error: 'サーバーエラーが発生しました' }, 500)
+    return c.json({ 
+      error: 'サーバーエラーが発生しました', 
+      success: false 
+    }, 500)
   }
 })
 
