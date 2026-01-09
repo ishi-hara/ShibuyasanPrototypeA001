@@ -4,6 +4,15 @@
  */
 
 import { Context } from 'hono'
+import { kawanishiData, ikedaData } from '../lib/places'
+
+// 場所データをJSON形式で埋め込み
+const placesDataScript = `
+const PLACES_DATA = {
+  kawanishi: ${JSON.stringify(kawanishiData)},
+  ikeda: ${JSON.stringify(ikedaData)}
+};
+`;
 
 export const chatPage = (c: Context) => {
   return c.html(`
@@ -13,6 +22,8 @@ export const chatPage = (c: Context) => {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>ゆめまち - チャット</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; width: 100%; overflow: hidden; }
@@ -198,6 +209,80 @@ export const chatPage = (c: Context) => {
     .generate-btn:disabled { opacity: 0.7; cursor: not-allowed; }
     .chat-messages::-webkit-scrollbar { width: 4px; }
     .chat-messages::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.2); border-radius: 2px; }
+    
+    /* 地図スタイル */
+    .map-container {
+      width: 100%;
+      height: 280px;
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 12px;
+      border: 1px solid #d1d1d6;
+    }
+    #placeMap {
+      width: 100%;
+      height: 100%;
+    }
+    .place-list {
+      max-height: 200px;
+      overflow-y: auto;
+      margin-bottom: 12px;
+    }
+    .place-item {
+      padding: 12px 16px;
+      background: #ffffff;
+      border: 1px solid #d1d1d6;
+      border-radius: 10px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .place-item:hover { background: rgba(0, 122, 255, 0.08); border-color: #007aff; }
+    .place-item:active { transform: scale(0.98); }
+    .place-item-name { font-weight: 600; color: #1c1c1e; margin-bottom: 4px; }
+    .place-item-desc { font-size: 0.85rem; color: #8e8e93; }
+    .selected-place {
+      background: rgba(52, 199, 89, 0.1);
+      border-color: #34c759;
+      padding: 12px;
+      border-radius: 10px;
+      margin-bottom: 12px;
+    }
+    .selected-place-label { font-size: 0.85rem; color: #8e8e93; margin-bottom: 4px; }
+    .selected-place-name { font-weight: 600; color: #34c759; }
+    
+    /* マップマーカーのカスタムスタイル */
+    .custom-marker {
+      background: #007aff;
+      border: 2px solid #ffffff;
+      border-radius: 50%;
+      width: 24px;
+      height: 24px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    }
+    .custom-marker.landmark { background: #ff9500; }
+    .custom-marker.public { background: #007aff; }
+    
+    .leaflet-popup-content-wrapper {
+      border-radius: 10px;
+    }
+    .leaflet-popup-content {
+      margin: 10px 14px;
+      font-family: inherit;
+    }
+    .popup-name { font-weight: 600; margin-bottom: 4px; }
+    .popup-desc { font-size: 0.85rem; color: #666; margin-bottom: 8px; }
+    .popup-select-btn {
+      background: #007aff;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      width: 100%;
+    }
+    .popup-select-btn:hover { background: #0056b3; }
   </style>
 </head>
 <body>
@@ -215,15 +300,22 @@ export const chatPage = (c: Context) => {
   </div>
 
   <script>
+    ${placesDataScript}
+    
     // ========== 状態管理 ==========
     const draft = {
       userInfo: { age: '', gender: '', aiImageExp: '', aiVideoExp: '' },
       mode: '',
       placeText: '',
+      selectedCity: '',    // 選択された市
+      selectionMethod: '', // 選択方法
       userText: '',
       options: { users: [], atmosphere: [], viewpoint: '', style: '' }
     };
     let currentMode = '';
+    let mapInstance = null;
+    let selectedPlaceFromMap = null;
+    
     const messagesContainer = document.getElementById('messages');
     const inputArea = document.getElementById('inputArea');
 
@@ -332,9 +424,194 @@ export const chatPage = (c: Context) => {
       currentMode = mode;
       draft.mode = mode;
       addUserMessage(mode === 'dreamer' ? '①お任せ（かんたん）' : '②ちょい足し（少しこだわる）');
-      setTimeout(() => { addBotMessage('場所はどこにする？（未入力でもOK）'); showPlaceInput(); }, 400);
+      
+      setTimeout(() => {
+        if (mode === 'arranger') {
+          // ちょい足しモード: 市の選択から始める
+          addBotMessage('どの市の"夢のまち"を描く？');
+          showCitySelection();
+        } else {
+          // お任せモード: 従来のテキスト入力
+          addBotMessage('場所はどこにする？（未入力でもOK）');
+          showPlaceInput();
+        }
+      }, 400);
     }
 
+    // ========== ちょい足しモード: 場所選択フロー ==========
+    
+    // Step 1: 市の選択
+    function showCitySelection() {
+      inputArea.innerHTML = \`
+        <div class="button-options">
+          <button class="option-btn" onclick="selectCity('川西市')">川西市</button>
+          <button class="option-btn" onclick="selectCity('池田市')">池田市</button>
+        </div>
+      \`;
+    }
+
+    function selectCity(city) {
+      draft.selectedCity = city;
+      addUserMessage(city);
+      setTimeout(() => {
+        addBotMessage('場所の選び方を教えてね。');
+        showSelectionMethod();
+      }, 400);
+    }
+
+    // Step 2: 選択方法
+    function showSelectionMethod() {
+      inputArea.innerHTML = \`
+        <div class="button-options">
+          <button class="option-btn" onclick="selectMethod('map')">🗺️ 地図から選択する</button>
+          <button class="option-btn" onclick="selectMethod('public')">🏛️ 公共施設から選択する</button>
+          <button class="option-btn" onclick="selectMethod('landmark')">⭐ 名所から選択する</button>
+        </div>
+      \`;
+    }
+
+    function selectMethod(method) {
+      draft.selectionMethod = method;
+      const methodLabels = { map: '地図から選択', public: '公共施設から選択', landmark: '名所から選択' };
+      addUserMessage(methodLabels[method]);
+      
+      setTimeout(() => {
+        if (method === 'map') {
+          addBotMessage('地図で場所をタップしてね。');
+          showMapSelection();
+        } else if (method === 'public') {
+          addBotMessage('公共施設を選んでね。');
+          showPlaceList('public');
+        } else {
+          addBotMessage('名所を選んでね。');
+          showPlaceList('landmark');
+        }
+      }, 400);
+    }
+
+    // Step 3a: 地図から選択
+    function showMapSelection() {
+      const cityData = draft.selectedCity === '川西市' ? PLACES_DATA.kawanishi : PLACES_DATA.ikeda;
+      selectedPlaceFromMap = null;
+      
+      inputArea.innerHTML = \`
+        <div class="map-container">
+          <div id="placeMap"></div>
+        </div>
+        <div id="selectedPlaceInfo"></div>
+        <button class="option-btn" id="confirmPlaceBtn" style="display: none;" onclick="confirmMapSelection()">この場所を選択</button>
+        <button class="option-btn skip" onclick="skipPlace()">スキップ</button>
+      \`;
+      
+      // 地図の初期化（少し遅延させてDOM描画を待つ）
+      setTimeout(() => {
+        initMap(cityData);
+      }, 100);
+    }
+
+    function initMap(cityData) {
+      if (mapInstance) {
+        mapInstance.remove();
+        mapInstance = null;
+      }
+      
+      mapInstance = L.map('placeMap').setView([cityData.center.lat, cityData.center.lng], cityData.zoom);
+      
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(mapInstance);
+      
+      // マーカーを追加
+      cityData.places.forEach(place => {
+        const markerColor = place.type === 'landmark' ? '#ff9500' : '#007aff';
+        const icon = L.divIcon({
+          className: 'custom-div-icon',
+          html: \`<div style="background: \${markerColor}; border: 2px solid #fff; border-radius: 50%; width: 24px; height: 24px; box-shadow: 0 2px 6px rgba(0,0,0,0.3);"></div>\`,
+          iconSize: [24, 24],
+          iconAnchor: [12, 12]
+        });
+        
+        const marker = L.marker([place.lat, place.lng], { icon }).addTo(mapInstance);
+        
+        const popupContent = \`
+          <div class="popup-name">\${place.name}</div>
+          <div class="popup-desc">\${place.description || ''}</div>
+          <button class="popup-select-btn" onclick="selectPlaceFromMap('\${place.id}', '\${place.name.replace(/'/g, "\\\\'")}')">選択する</button>
+        \`;
+        
+        marker.bindPopup(popupContent);
+      });
+      
+      // 地図のサイズ調整
+      setTimeout(() => {
+        mapInstance.invalidateSize();
+      }, 200);
+    }
+
+    function selectPlaceFromMap(placeId, placeName) {
+      selectedPlaceFromMap = { id: placeId, name: placeName };
+      
+      document.getElementById('selectedPlaceInfo').innerHTML = \`
+        <div class="selected-place">
+          <div class="selected-place-label">選択中の場所</div>
+          <div class="selected-place-name">\${placeName}</div>
+        </div>
+      \`;
+      
+      document.getElementById('confirmPlaceBtn').style.display = 'block';
+      
+      // ポップアップを閉じる
+      if (mapInstance) {
+        mapInstance.closePopup();
+      }
+    }
+
+    function confirmMapSelection() {
+      if (selectedPlaceFromMap) {
+        draft.placeText = selectedPlaceFromMap.name;
+        addUserMessage(selectedPlaceFromMap.name);
+        
+        // 地図をクリーンアップ
+        if (mapInstance) {
+          mapInstance.remove();
+          mapInstance = null;
+        }
+        
+        setTimeout(() => {
+          addBotMessage('どんな"夢のまち"にしたい？自由に教えてね');
+          showIdeaInput();
+        }, 400);
+      }
+    }
+
+    // Step 3b: リストから選択（公共施設/名所）
+    function showPlaceList(type) {
+      const cityData = draft.selectedCity === '川西市' ? PLACES_DATA.kawanishi : PLACES_DATA.ikeda;
+      const places = cityData.places.filter(p => p.type === type);
+      
+      inputArea.innerHTML = \`
+        <div class="place-list">
+          \${places.map(p => \`
+            <div class="place-item" onclick="selectPlaceFromList('\${p.name.replace(/'/g, "\\\\'")}')">
+              <div class="place-item-name">\${p.name}</div>
+              <div class="place-item-desc">\${p.description || ''}</div>
+            </div>
+          \`).join('')}
+        </div>
+        <button class="option-btn skip" onclick="skipPlace()">スキップ</button>
+      \`;
+    }
+
+    function selectPlaceFromList(placeName) {
+      draft.placeText = placeName;
+      addUserMessage(placeName);
+      setTimeout(() => {
+        addBotMessage('どんな"夢のまち"にしたい？自由に教えてね');
+        showIdeaInput();
+      }, 400);
+    }
+
+    // ========== お任せモード: テキスト入力 ==========
     function showPlaceInput() {
       inputArea.innerHTML = \`
         <div class="text-input-wrapper">
@@ -360,6 +637,13 @@ export const chatPage = (c: Context) => {
     function skipPlace() {
       draft.placeText = '';
       addUserMessage('スキップ');
+      
+      // 地図をクリーンアップ
+      if (mapInstance) {
+        mapInstance.remove();
+        mapInstance = null;
+      }
+      
       setTimeout(() => { addBotMessage('どんな"夢のまち"にしたい？自由に教えてね'); showIdeaInput(); }, 400);
     }
 
@@ -480,6 +764,8 @@ export const chatPage = (c: Context) => {
         userInfo: draft.userInfo,
         mode: draft.mode,
         placeText: draft.placeText,
+        selectedCity: draft.selectedCity,
+        selectionMethod: draft.selectionMethod,
         userText: draft.userText,
         options: draft.options
       };
@@ -493,12 +779,21 @@ export const chatPage = (c: Context) => {
 
     function resetChat() {
       if (confirm('最初からやり直しますか？')) {
+        // 地図をクリーンアップ
+        if (mapInstance) {
+          mapInstance.remove();
+          mapInstance = null;
+        }
+        
         draft.userInfo = { age: '', gender: '', aiImageExp: '', aiVideoExp: '' };
         draft.mode = '';
         draft.placeText = '';
+        draft.selectedCity = '';
+        draft.selectionMethod = '';
         draft.userText = '';
         draft.options = { users: [], atmosphere: [], viewpoint: '', style: '' };
         currentMode = '';
+        selectedPlaceFromMap = null;
         messagesContainer.innerHTML = '';
         init();
       }
